@@ -1,10 +1,20 @@
-org 0x7C00 ; boot sector
+org 0x0 ; boot sector
 bits 16 ; 16-bit code
 
 %define ENDL 0x0D, 0x0A ; define end of line
 
 start:
   jmp main
+
+
+main:
+  ; print message
+  mov si, msg_hello ; load address of string into si
+  call puts ; call puts to print the string
+
+.halt:
+  cli
+  hlt ; hold the cpu
 
 ; Prints a string to the screen
 ; Params:
@@ -30,25 +40,4 @@ puts:
   pop si
   ret
 
-main:
-;setup data segments
-  mov ax, 0 ; can't write to ds/es directly
-  mov ds, ax ; data segment
-  mov es, ax ; extra segment
-
-  ;setup stack
-  mov ss, ax ; stack segment
-  mov sp, 0x7C00 ; stack grows downwards from where we are loaded in memory
-
-  ; print message
-  mov si, msg_hello ; load address of string into si
-  call puts ; call puts to print the string
-
-  hlt ; hold the cpu
-  .halt:
-    jmp .halt ; infinite loop
-
 msg_hello: db 'Hello world!', ENDL, 0 ; null-terminated string
-
-times 510-($-$$) db 0 ; fill the rest of the sector with zeros
-db 0x55, 0xAA ; boot sector signature
