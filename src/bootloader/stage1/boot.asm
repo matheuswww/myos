@@ -105,7 +105,7 @@ start:
   mov di, buffer
 
 .search_kernel:
-  mov si, file_kernel_bin
+  mov si, file_stage2_bin
   mov cx, 11                                       ; compare up to 11 characters
   push di
   repe cmpsb
@@ -203,7 +203,7 @@ floppy_error:
   jmp wait_key_and_reboot
 
 kernel_not_found_error:
-  mov si, msg_kernel_not_found
+  mov si, msg_stage2_not_found
   call puts
   jmp wait_key_and_reboot
 

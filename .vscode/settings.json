@@ -1,0 +1,7 @@
+{
+  "files.associations": {
+    "cstdio": "c",
+    "*.inc": "c",
+    "stdint.h": "c"
+  }
+}
