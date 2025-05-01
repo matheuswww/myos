@@ -1,2 +1,2 @@
 stdint.h(19): Warning! W138: No newline at end of file
-stdio.c(195): Warning! W138: No newline at end of file
+string.c(47): Warning! W138: No newline at end of file
