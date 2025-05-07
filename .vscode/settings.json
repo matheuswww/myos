@@ -1,8 +1,5 @@
 {
   "files.associations": {
-    "format": "c",
-    "chrono": "c",
-    "text_encoding": "c",
-    "typeinfo": "c"
+    "stdint.h": "c"
   }
 }
