@@ -14,7 +14,7 @@ start:
   mov ch, 0           ; CH = 0 -> cylinder number (track)
   mov cl, 2           ; CL = 2 -> sector number (starts at 1)
   mov dh, 0           ; DH = 0 -> head number
-  mov dl, 0           ; DL = 0 -> drive number (0 = first floppy/hard disk)
+  
   mov bx, 0x7E00      ; BX = 0x7E00 -> memory offset to load the sectors (ES:BX)
   int 0x13            ; call BIOS interrupt 0x13 to read sectors
   jc disk_error       ; jump to error handler if carry flag is set (read failed)

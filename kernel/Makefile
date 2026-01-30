@@ -44,8 +44,8 @@ $(LIBS)
 
 all: myos.kernel
 
-myos.kernel: $(OBJS) $(ARCHDIR)/linker.ld
-	$(CC) -T $(ARCHDIR)/linker.ld -o $@ $(CFLAGS) $(LINK_LIST)
+myos.kernel: $(OBJS) $(ARCHDIR)/asm/linker.ld
+	$(CC) -T $(ARCHDIR)/asm/linker.ld -o $@ $(CFLAGS) $(LINK_LIST)
 
 %.o: %.c
 	$(CC) -MD -c $< -o $@ -std=gnu11 $(CFLAGS)
