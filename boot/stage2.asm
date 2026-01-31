@@ -297,8 +297,8 @@ KERNEL_PHYS       equ 0x105000
 ; Identity mapping (low memory)
 IDENTITY_VIRT   equ 0x00000000
 ; VRAM mapped at 1 MB virtual
-VRAM_VIRT       equ 0x00100000
-; Kernel mapped at 5 MB virtual
+VRAM_VIRT       equ 0x00101000
+; Kernel mapped at 4 MB virtual
 KERNEL_VIRT     equ 0x00400000
 
 ; Page flags
@@ -335,7 +335,7 @@ init_identity_pt:
 
 .fill_identity:
   cmp ebx, VRAM_VIRT
-  jae .is_vram  ; If EBX >= 1MB, jump to map VRAM
+  jae .is_vram  ; If EBX >= 1.004MB, jump to map VRAM
 
   ; Identity Mapping (Virtual Address = Physical Address)
   mov eax, ebx
@@ -424,7 +424,7 @@ set_vbe_info:
   ;     ; .cursor_y         dw 0      ; Current cursor Y position
   ;     ; .text_color       dd 0      ; Current text color (RGBA or similar)
 
-  mov edi, VRAM_VIRT                  ; edi = endereço virtual da estrutura
+  mov edi, VRAM_VIRT - 0x00001000
 
   movzx eax, word [width_]            ; eax = width (16-bit → 32-bit)
   mov [edi + 0], ax                   ; .width (dw)

@@ -1,12 +1,7 @@
 #include <stdio.h>
 
+#include <kernel/terminal.h>
 
-#include <kernel/tty.h>
-
-
-int putchar(int ic) {
-	char c = (char) ic;
-	terminal_write(&c, sizeof(c));
-
-	return ic;
+int puts(const char* string) {
+	return printf("%s\n", string);
 }
