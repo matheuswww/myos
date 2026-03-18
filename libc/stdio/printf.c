@@ -3,6 +3,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 
 static bool print(const char* data, size_t length) {
 	const unsigned char* bytes = (const unsigned char*) data;
@@ -61,6 +62,18 @@ int printf(const char* restrict format, ...) {
 			if (!print(str, len))
 				return -1;
 			written += len;
+		} else if (*format == 'd') {
+			format++;
+			const int64_t num = va_arg(parameters, const int);
+			const char* str = itoa(num);
+			size_t len = strlen(str);
+			if (maxrem < len) {
+				// TODO: Set errno to EOVERFLOW.
+				return -1;
+			}
+			if (!print(str, len))
+				return -1;
+			written += len;
 		} else {
 			format = format_begun_at;
 			size_t len = strlen(format);
@@ -77,4 +90,34 @@ int printf(const char* restrict format, ...) {
 
 	va_end(parameters);
 	return written;
+}
+
+char* itoa(int64_t num) {
+	static char str[21];
+	memset(str, sizeof(char), 21);
+	char *ptr = str + sizeof(str) - 1;
+	*ptr = '\0';
+
+	bool is_negative = false;
+
+	if (num < 0) {
+		is_negative = true;
+		num = -num;
+	}
+
+	if (num == 0) {
+		*--ptr = '0';
+	} else {
+		while (num > 0) {
+			int current = (num % 10) + '0';
+			*--ptr = current;
+			num = num / 10;
+		}
+	}
+
+	if (is_negative) {
+		*--ptr = '-';
+	}
+
+	return ptr;
 }
