@@ -18,10 +18,15 @@
 #define MAX_FILE_SIZE       0xFFFFFFFF
 #define MAX_ENTRYS          128
 #define FREE_FAT            0x00000000
-#define EOF_FAT             0x0FFFFFFF
+#define EOF_FAT             0x0FFFFFF8
+#define ROOT_DIR_CLUSTER    2
+
+#define FREE_ENTRY    0x00
+#define DELETED_ENTRY 0xE5
 
 #define STATE_ENTRY_CHAR    0
 #define STATE_EXT_CHAR      1
+
 
 typedef struct __attribute__((packed)) {
 
@@ -109,10 +114,10 @@ typedef struct __attribute__((packed)) {
   uint16_t LDIR_Name3[2];     // Characters 12-13 of the long-name sub-component in this dir entry.
 } LongFat32_DirEntry;
 
-typedef struct __attribute__((packed)) {
-  uint32_t cluster;
-  uint32_t offset;
-} Cluster_entry;
+typedef struct {
+  uint32_t Cluster;
+  uint32_t Offset;
+} Entry_Addr;
 
 void create_fat32();
 

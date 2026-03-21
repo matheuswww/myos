@@ -98,6 +98,11 @@ typedef struct __attribute__((packed)) {
   uint16_t LDIR_Name3[2];     // Characters 12-13 of the long-name sub-component in this dir entry.
 } LongFat32_DirEntry;
 
+typedef struct {
+  uint32_t Cluster;
+  uint32_t Offset;
+} Entry_Addr;
+
 void create_fat32();
 
 #endif
