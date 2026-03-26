@@ -73,7 +73,7 @@ FAT32_FSInfo_s* create_fat32_fs_info_s() {
 
 FAT32_DirEntry create_fat32_entry(uint32_t data_cluster, uint8_t name[MAX_ENTRY_NAME], uint32_t size, uint8_t attr) {
   FAT32_DirEntry fatDirEntry;
-  
+
   memcpy(fatDirEntry.DIR_name, name, MAX_ENTRY_NAME);
   fatDirEntry.DIR_Attr = attr;
   fatDirEntry.DIR_NTRES = 0;
@@ -150,7 +150,7 @@ uint32_t get_next_free_cluster() {
     read_ata_st_c(get_fat_sector(fat), buffer, 1, &drv);
     uint32_t offset = get_fat_offset(fat);
 
-    if (*(uint32_t*)&buffer[offset] == FREE_FAT) {
+    if ((*(uint32_t*)&buffer[offset] & FAT32_MASK ) == FREE_FAT) {
       return fat;
     }
     if (fat >= max_fats_entry) {
@@ -178,9 +178,8 @@ void update_cluster(uint32_t cluster, uint32_t offset, void* fat_entry, uint32_t
   if (sectors > fat_boot->BPB_SecPerClus || offset > MAX_ENTRYS - 1) {
     return;
   }
-  uint32_t bytes = fat_boot->BPB_BytsPerSec * fat_boot->BPB_SecPerClus;
-  uint8_t *buf = (uint8_t*)alloc(bytes);
-  memset(buf, 0, bytes);
+  uint8_t *buf = (uint8_t*)alloc(clusterSizeBytes);
+  memset(buf, 0, clusterSizeBytes);
   read_ata_st_c(get_cluster_sector(cluster), buf, fat_boot->BPB_SecPerClus, &drv);
   memcpy(&buf[offset], fat_entry, size);
   write_ata_st_c(get_cluster_sector(cluster), buf, fat_boot->BPB_SecPerClus, &drv);
@@ -190,14 +189,17 @@ void update_cluster(uint32_t cluster, uint32_t offset, void* fat_entry, uint32_t
   free(buf);
 }
 
-Entry_Addr* get_free_entry_addr(uint32_t cluster) {
+Entry* get_free_entry_in_cluster(uint32_t cluster) {
   FAT32_DirEntry* entry;
-  uint8_t* cluster_buff = alloc(fat_boot->BPB_BytsPerSec * fat_boot->BPB_SecPerClus);
+  uint8_t* cluster_buff = alloc(clusterSizeBytes);
   read_ata_st_c(get_cluster_sector(cluster), cluster_buff, fat_boot->BPB_SecPerClus, &drv);
   for (int i = 0; i < MAX_ENTRYS - 1; i++) {
     entry = (FAT32_DirEntry*)&cluster_buff[i*32];
     if (entry->DIR_name[0] == FREE_ENTRY) {
-      Entry_Addr* entry_addr = (Entry_Addr*)alloc(sizeof(Entry_Addr));
+      Entry* entry_addr = (Entry*)alloc(sizeof(Entry));
+      FAT32_DirEntry* e = (FAT32_DirEntry*)alloc(sizeof(FAT32_DirEntry));
+      memcpy(e, entry, sizeof(FAT32_DirEntry));
+      entry_addr->entry = entry;
       entry_addr->Cluster = cluster;
       entry_addr->Offset = i;
       free(cluster_buff);
@@ -206,43 +208,54 @@ Entry_Addr* get_free_entry_addr(uint32_t cluster) {
   }
   free(cluster_buff);
   uint32_t new_cluster = fs_info->FSI_Nxt_Free;
-  Entry_Addr* entry_addr = (Entry_Addr*)alloc(sizeof(Entry_Addr));
+  Entry* entry_addr = (Entry*)alloc(sizeof(Entry));
   entry_addr->Cluster = new_cluster;
   entry_addr->Offset = 0;
   return entry_addr;
 }
 
-uint32_t check_entry_exists(uint32_t cluster, uint8_t entry_name[MAX_ENTRY_NAME]) {
-  uint8_t* cluster_buff = alloc(fat_boot->BPB_BytsPerSec * fat_boot->BPB_SecPerClus);
+Entry* get_entry(uint32_t cluster, uint8_t entry_name[MAX_ENTRY_NAME]) {
+  uint8_t* cluster_buff = alloc(clusterSizeBytes);
   while(1) {
     read_ata_st_c(get_cluster_sector(cluster), cluster_buff, fat_boot->BPB_SecPerClus, &drv);
     FAT32_DirEntry* entry;
     for (int i = 0; i < MAX_ENTRYS; i++) {
       entry = (FAT32_DirEntry*)&cluster_buff[i*32];
+ 
       int cmp = memcmp(entry->DIR_name, entry_name, MAX_ENTRY_NAME);
       if (cmp == 0) {
+        FAT32_DirEntry* e = (FAT32_DirEntry*)alloc(sizeof(FAT32_DirEntry));
+        memcpy(e, entry, sizeof(FAT32_DirEntry));
+        Entry* entry_addr = (Entry*)alloc(sizeof(Entry));
+        entry_addr->entry = entry;
+        entry_addr->Cluster = cluster;
+        entry_addr->Offset = i;
         free(cluster_buff);
-        return entry->DIR_FstClusHI | entry->DIR_FstClustLO;
+        return entry_addr;
+      }
+      if (entry->DIR_name[0] == FREE_ENTRY) {
+        free(cluster_buff);
+        return (Entry*)0;
       }
     }
     uint32_t fat_buff[128];
     uint32_t sector = get_fat_sector(cluster);
-    uint32_t offset = get_fat_offset(cluster);
+    uint32_t offset = get_fat_offset(cluster) / 4;
     read_ata_st_c(sector, fat_buff, 1, &drv);
-    int val = fat_buff[offset];
+    int val = fat_buff[offset] & FAT32_MASK;
     if (val >= EOF) {
       break;
     }
     cluster = val;
   }
   free(cluster_buff);
-  return 0;
+  return (Entry*)0;
 }
 
 void format_name(uint8_t name[MAX_ENTRY_NAME], uint32_t name_len, bool is_dir) {
-  if (!is_dir && name_len < MAX_ENTRY_NAME) {
+  if (name_len <= MAX_ENTRY_NAME) {
     for (uint8_t i = 0; i < 11; i++) {
-      if (is_dir && i >= name_len - 4) {
+      if (!is_dir && i >= name_len - 4) {
         if (name[i] == '.') {
           name[10] = name[name_len - 1];
           name[9] = name[name_len - 2];
@@ -261,7 +274,7 @@ void format_name(uint8_t name[MAX_ENTRY_NAME], uint32_t name_len, bool is_dir) {
   }
 }
 
-uint32_t check_path(uint8_t* path, bool is_dir, bool is_insert, uint8_t last_entry[MAX_ENTRY_NAME]) {
+ Ref* check_path(uint8_t* path, bool is_dir, bool is_insert, uint8_t last_entry[MAX_ENTRY_NAME]) {
   uint8_t* ptr = path;
   uint8_t c = *ptr;
   uint8_t current_path[MAX_ENTRY_NAME] = "";
@@ -269,10 +282,17 @@ uint32_t check_path(uint8_t* path, bool is_dir, bool is_insert, uint8_t last_ent
   uint8_t current_ext_len = 0;
   uint16_t paths = 1;
   uint32_t cluster = ROOT_DIR_CLUSTER;
-
+  Ref* ref_cluster = (Ref*)alloc(sizeof(Ref));
+  Entry* e = (Entry*)alloc(sizeof(Entry));
+  e->Cluster = ROOT_DIR_CLUSTER;
+  e->Offset = 0;
+  e->entry = (Entry*)0;
+  ref_cluster->Self_entry = e;
+  ref_cluster->Parent_entry = (Entry*)0;
   if (path[0] != '/' || (path[0] == '/' && path[1] == '/')) {
     printf("invalid path: %s", path);
-    return 0;
+    free(ref_cluster);
+    return (Ref*)0;
   }
 
   uint8_t state = STATE_ENTRY_CHAR;
@@ -280,12 +300,16 @@ uint32_t check_path(uint8_t* path, bool is_dir, bool is_insert, uint8_t last_ent
   while (1) {
     if (state == STATE_EXT_CHAR && current_ext_len >= 4 && c != '\0') {
       printf("the ext must be 3 characters\n");
-      return 0;
+      free(e);
+      free(ref_cluster);
+      return (Ref*)0;
     }
 
     if (c == '/' && path_len == 0 && paths > 1) {
       printf("invalid path: %s", current_path);
-      return 0;
+      free(e);
+      free(ref_cluster);
+      return (Ref*)0;
     }
 
     if ((c == '/' && path_len > 0) || c == '\0') {
@@ -294,27 +318,41 @@ uint32_t check_path(uint8_t* path, bool is_dir, bool is_insert, uint8_t last_ent
       ptr++;
       if (c == '.') {
         printf("the path cannot end with '.'\n");
-        return 0;
+        free(e);
+        free(ref_cluster);
+        return (Ref*)0;
       }
       if (c == ' '){
         printf("the path cannot end with ' '\n");
-        return 0;
+        free(e);
+        free(ref_cluster);
+        return (Ref*)0;
       }
       c = *ptr;
+      Entry* entry_addr;
       if ((c == '/' ) || (c == '\0' && !is_insert)) {
         current_path[path_len] = '\0';
-        format_name(current_path, path_len, true);
-        cluster = check_entry_exists(cluster, current_path);
-        if (cluster == 0) {
-          printf("dir not found: %s\n", current_path);
-          return 0;
+        ref_cluster->Parent_entry = entry_addr;
+        entry_addr = get_entry(cluster, current_path);
+        if (entry_addr == (Entry*)0) {
+          printf("dir not founssd: %s\n", current_path);
+          free(e);
+          free(ref_cluster);
+          return (Ref*)0;
         }
+        cluster = (entry_addr->entry->DIR_FstClusHI << 16) | entry_addr->entry->DIR_FstClustLO;
       }
       if (c == '\0') {
         if (state == STATE_EXT_CHAR && current_ext_len != 3) {
           printf("the ext must be 3 characters\n");
-          return 0;
+          free(e);
+          free(ref_cluster);
+          return (Ref*)0;
         }
+        if (cluster != 2) {
+          ref_cluster->Self_entry = entry_addr;
+        }
+        free(e);
         break;
       }
       memset(current_path, 0, MAX_ENTRY_NAME);
@@ -326,27 +364,37 @@ uint32_t check_path(uint8_t* path, bool is_dir, bool is_insert, uint8_t last_ent
       case STATE_EXT_CHAR:
       if (c == '.') {
         printf("the name cannot have two points\n");
-        return 0;
+        free(e);
+        free(ref_cluster);
+        return (Ref*)0;
       }
       current_ext_len++;
       if (current_ext_len > 4) {
         printf("the ext cannot have a len greater than 3\n");
-        return 0;
+        free(e);
+        free(ref_cluster);
+        return (Ref*)0;
       }
       
       case STATE_ENTRY_CHAR:
       if (c != '/') {
         if (!is_valid_fat_char(c, is_dir)) {
-          printf("invalid char: %c", c);
-          return 0;
+          printf("invalid char: %s\n", path);
+          free(e);
+          free(ref_cluster);
+          return (Ref*)0;
         }
         if (path_len == 0 && c == '.'){
           printf("the name cannot start with '.'\n");
-          return 0;
+          free(e);
+          free(ref_cluster);
+          return (Ref*)0;
         }
         if (path_len == 0 && (c == 0x00 || c == 0xE5)) {
           printf("the name cannot start with 0x00 or OxE5\n");
-          return 0;
+          free(e);
+          free(ref_cluster);
+          return (Ref*)0;
         }
 
         current_path[path_len] = c; 
@@ -354,7 +402,8 @@ uint32_t check_path(uint8_t* path, bool is_dir, bool is_insert, uint8_t last_ent
         
         if (path_len > MAX_ENTRY_NAME && c != '\0') {
           printf("too large path: %s", path);
-          return 0;
+          free(ref_cluster);
+          return (Ref*)0;
         }
         
         if (c == '.') {
@@ -368,56 +417,167 @@ uint32_t check_path(uint8_t* path, bool is_dir, bool is_insert, uint8_t last_ent
     c = *ptr;
   }
 
-  format_name(current_path, path_len, is_dir);
+
 
   memcpy(last_entry, current_path, MAX_ENTRY_NAME);
 
-  return cluster;
+  return ref_cluster;
 }
 
+bool check_file_name_exists(uint32_t cluster, uint8_t name[MAX_ENTRY_NAME]) {
+  uint8_t* cluster_buff = alloc(clusterSizeBytes);
+  while(1) {
+    read_ata_st_c(get_cluster_sector(cluster), cluster_buff, fat_boot->BPB_SecPerClus, &drv);
+    FAT32_DirEntry* entry;
+    for (int i = 0; i < MAX_ENTRYS; i++) {
+      entry = (FAT32_DirEntry*)&cluster_buff[i*32];
+      int cmp = memcmp(entry->DIR_name, name, MAX_ENTRY_NAME);
+      if (cmp == 0) {
+        free(cluster_buff);
+        return true;
+      }
+      if (entry->DIR_name[0] == FREE_ENTRY) {
+        free(cluster_buff);
+        return false;
+      }
+    }
+    uint32_t fat_buff[128];
+    uint32_t sector = get_fat_sector(cluster);
+    uint32_t offset = get_fat_offset(cluster) / 4;
+    read_ata_st_c(sector, fat_buff, 1, &drv);
+    int val = fat_buff[offset] & FAT32_MASK;
+    if (val >= EOF) {
+      break;  
+    }
+    cluster = val;
+  }
+  free(cluster_buff);
+  return false;
+}
+
+Buff_cluster* read_fat32(uint8_t* path, uint32_t size) {
+  uint8_t file[MAX_ENTRY_NAME];
+  Ref* ref_cluster = check_path(path, false, false, file);
+  if (ref_cluster == (Ref*)0) {
+    return (Buff_cluster*)0;
+  }
+  uint8_t* cluster_buff = alloc(clusterSizeBytes);
+
+  if (size > ref_cluster->Self_entry->entry->DIR_FileSize) {
+    free(cluster_buff);
+    printf("size requested exceed file size\n");
+    return (Buff_cluster*)0;
+  }
+
+  uint32_t cluster = (ref_cluster->Self_entry->entry->DIR_FstClusHI << 16) | ref_cluster->Self_entry->entry->DIR_FstClustLO;
+  uint32_t clusters = (size + clusterSizeBytes - 1) / clusterSizeBytes;
+  uint8_t* buff = (uint8_t*)alloc(size);
+  uint32_t bytes;
+  for (uint32_t i = 0; i < clusters; i++) {
+    bytes = clusterSizeBytes;
+    if (i == clusters - 1) {
+      bytes = size - (i * clusterSizeBytes);
+    }
+    read_ata_st_c(get_cluster_sector(cluster), cluster_buff, fat_boot->BPB_SecPerClus, &drv);
+    memcpy(&buff[i * clusterSizeBytes], cluster_buff, bytes);
+    read_ata_st_c(get_fat_sector(cluster), cluster_buff, fat_boot->BPB_SecPerClus, &drv);
+    uint32_t fat_entry = (uint32_t)cluster_buff[get_fat_offset(cluster)];
+    uint32_t val = fat_entry & FAT32_MASK;
+    cluster = val;
+  }
+  
+  Buff_cluster* buff_cluster = (Buff_cluster*)alloc(sizeof(Buff_cluster));
+  buff_cluster->Buff = buff;
+  buff_cluster->Cluster = cluster;
+  
+  free(cluster_buff);
+
+  return buff_cluster;
+}
+
+//uint8_t* read_fat32_offset(uint32_t cluster, uint32_t offset, uint32_t size) {}
+
 bool create_fat32_directory(uint8_t* path) {
-uint8_t new_entry[MAX_ENTRY_NAME];
-  uint32_t dir_cluster;
-  dir_cluster = check_path(path, true, true, new_entry);
-  if (dir_cluster == 0) {
+  uint8_t new_entry[MAX_ENTRY_NAME];
+  Ref* ref_cluster = check_path(path, true, true, new_entry);
+
+  if (ref_cluster == (Ref*)0) {
     return false;
+  }
+
+  uint32_t entry_cluster = ROOT_DIR_CLUSTER;
+
+  if (ref_cluster->Self_entry->entry != (Entry*)0) {
+   entry_cluster = (ref_cluster->Self_entry->entry->DIR_FstClusHI << 16) | ref_cluster->Self_entry->entry->DIR_FstClustLO;
+  }
+
+  if (check_file_name_exists(entry_cluster, new_entry)) {
+    printf("this name already exists: %s\n", new_entry);
+    free(ref_cluster);
+    return (Ref*)0;
   }
   
   uint32_t cluster = get_next_free_cluster();
-
   uint8_t attr = ATTR_DIRECTORY;
   FAT32_DirEntry fat_entry = create_fat32_entry(cluster, new_entry, 0, attr);
   
-  Entry_Addr* entry_addr = get_free_entry_addr(dir_cluster);
-  if (entry_addr->Offset == 0 && entry_addr->Cluster != ROOT_DIR_CLUSTER) {
-    update_fat_entry(dir_cluster, entry_addr->Cluster);
+  Entry* entry_addr = get_free_entry_in_cluster(entry_cluster);
+  if (entry_addr->Offset == 0 && entry_cluster != ROOT_DIR_CLUSTER) {
+    update_fat_entry(entry_cluster, entry_addr->Cluster);
     update_fat_entry(entry_addr->Cluster, EOF);
   }
   update_cluster(entry_addr->Cluster, get_entry_offset_in_cluster(entry_addr->Offset), &fat_entry, sizeof(FAT32_DirEntry), true);
   update_next_free_cluster();
+
+  new_entry[0] = '.';
+  memset(new_entry+1, ' ', 10);
+  fat_entry = create_fat32_entry(entry_addr->Cluster, new_entry, 0, attr);
+  update_cluster(cluster, 0, &fat_entry, sizeof(FAT32_DirEntry), true);
+
+  new_entry[0] = '.';
+  new_entry[1] = '.';
+  memset(new_entry+2, ' ', 9);
+  fat_entry = create_fat32_entry(cluster, new_entry, get_entry_offset_in_cluster(1), attr);
+  update_cluster(cluster, get_entry_offset_in_cluster(1), &fat_entry, sizeof(FAT32_DirEntry), true);
+
+  free(entry_addr->entry);
+  free(entry_addr);
+  free(ref_cluster);
+  return true;
 }
 
-bool create_fat32_file(uint8_t *buffer, uint8_t* path, uint32_t size) {  
+bool create_fat32_file(uint8_t *buffer, uint8_t* path, uint32_t size) {
   if (size > MAX_FILE_SIZE) {
     printf("too large size, max: %d", MAX_FILE_SIZE);
     return false;
   }
 
   uint8_t new_entry[MAX_ENTRY_NAME];
-  uint32_t dir_cluster;
-  dir_cluster = check_path(path, false, true, new_entry);
-  if (dir_cluster == 0) {
+  Ref* ref_cluster = check_path(path, false, true, new_entry);
+  if (ref_cluster == (Ref*)0) {
     return false;
   }
 
+  uint32_t entry_cluster = ROOT_DIR_CLUSTER;
+
+  if (ref_cluster->Self_entry->entry != (Entry*)0) {
+   entry_cluster = (ref_cluster->Self_entry->entry->DIR_FstClusHI << 16) | ref_cluster->Self_entry->entry->DIR_FstClustLO;
+  }
+
+  if (check_file_name_exists(entry_cluster, new_entry)) {
+    printf("this name already exists: %s\n", new_entry);
+    free(ref_cluster);
+    return (Ref*)0;
+  }
+  
   uint32_t cluster = get_next_free_cluster();
 
   uint8_t attr = ATTR_ARCHIVE;
   FAT32_DirEntry fat_entry = create_fat32_entry(cluster, new_entry, size, attr);
   
-  Entry_Addr* entry_addr = get_free_entry_addr(dir_cluster);
-  if (entry_addr->Offset == 0 && entry_addr->Cluster != ROOT_DIR_CLUSTER) {
-    update_fat_entry(dir_cluster, entry_addr->Cluster);
+  Entry* entry_addr = get_free_entry_in_cluster(entry_cluster);
+  if (entry_addr->Offset == 0 && entry_cluster != ROOT_DIR_CLUSTER) {
+    update_fat_entry(entry_cluster, entry_addr->Cluster);
     update_fat_entry(entry_addr->Cluster, EOF);
   }
   update_cluster(entry_addr->Cluster, get_entry_offset_in_cluster(entry_addr->Offset), &fat_entry, sizeof(FAT32_DirEntry), true);
@@ -438,6 +598,10 @@ bool create_fat32_file(uint8_t *buffer, uint8_t* path, uint32_t size) {
     update_fat_entry(cluster, entry_val);
     cluster = fs_info->FSI_Nxt_Free;
   }
+
+  free(entry_addr->entry);
+  free(entry_addr);
+  free(ref_cluster);
 
   return true;
 }
@@ -487,7 +651,6 @@ void create_fat32() {
   }
 
 
-
     
     // ==============================================
   // Test section - Verifying FAT32 file and directory creation
@@ -501,6 +664,7 @@ void create_fat32() {
   memcpy(file1_content, "Test1\0", 7);
 
   create_fat32_file(file1_content, file1_path, 6);
+  get_entry(2, "QLRCOISA");
 
   // Read root directory (cluster 2)
   uint8_t root_buffer[512];
@@ -517,7 +681,7 @@ void create_fat32() {
 
   uint32_t fat_buffer[128];
   read_ata_st_c(get_fat_sector(file1_cluster), fat_buffer, 1, &drv);
-  if ((int)fat_buffer[get_fat_offset(file1_cluster) / 4] >= 0x0FFFFFF8) {
+  if (((int)fat_buffer[get_fat_offset(file1_cluster) / 4] & FAT32_MASK) >= 0x0FFFFFF8) {
       printf("FAT file 1: end\n");
   }
 
@@ -529,6 +693,7 @@ void create_fat32() {
   memcpy(file2_content, "Test2\0", 8);
 
   create_fat32_file(file2_content, file2_path, 6);
+    get_entry(2, "QLRCOISA");
 
   read_ata_st_c(get_cluster_sector(2), root_buffer, 1, &drv);
 
@@ -541,12 +706,13 @@ void create_fat32() {
   printf("File 2 content: %s\n", content_buffer);
 
   read_ata_st_c(get_fat_sector(file2_cluster), fat_buffer, 1, &drv);
-  if ((int)fat_buffer[get_fat_offset(file2_cluster) / 4] >= 0x0FFFFFF8) {
+  if (((int)fat_buffer[get_fat_offset(file2_cluster) / 4] & FAT32_MASK) >= 0x0FFFFFF8) {
       printf("FAT file 2: end\n");
   }
-
+  
   // Test 3: Create directories
   create_fat32_directory("/TEST\0");
+  
   create_fat32_directory("/TEST/TESTL\0");
 
   // Test 4: Create file inside subdirectory - /TEST/TESTL/TESTT.TXT
@@ -570,7 +736,7 @@ void create_fat32() {
   read_ata_st_c(get_cluster_sector(test_cluster), test_dir_buffer, 1, &drv);
 
   // Get TESTL entry (first entry in TEST directory)
-  FAT32_DirEntry* entry_testl = (FAT32_DirEntry*)test_dir_buffer;
+  FAT32_DirEntry* entry_testl = (FAT32_DirEntry*)&test_dir_buffer[sizeof(FAT32_DirEntry) * 2];
   uint32_t testl_cluster = (entry_testl->DIR_FstClusHI << 16) | entry_testl->DIR_FstClustLO;
 
   // Read TESTL directory cluster
@@ -578,7 +744,7 @@ void create_fat32() {
   read_ata_st_c(get_cluster_sector(testl_cluster), testl_buffer, 1, &drv);
 
   // Get file entry (first entry in TESTL directory)
-  FAT32_DirEntry* entry_file3 = (FAT32_DirEntry*)testl_buffer;
+  FAT32_DirEntry* entry_file3 = (FAT32_DirEntry*)&testl_buffer[sizeof(FAT32_DirEntry) * 2];
   printf("File 3 name: %s\n", entry_file3->DIR_name);
 
   uint32_t file3_cluster = (entry_file3->DIR_FstClusHI << 16) | entry_file3->DIR_FstClustLO;
@@ -587,9 +753,12 @@ void create_fat32() {
   printf("File 3 content: %s\n", content_buffer);
 
   read_ata_st_c(get_fat_sector(file3_cluster), fat_buffer, 1, &drv);
-  if ((int)fat_buffer[get_fat_offset(file3_cluster) / 4] >= 0x0FFFFFF8) {
-      printf("FAT file 3: end\n");
+  if ((int)fat_buffer[get_fat_offset(file3_cluster)] & FAT32_MASK >= 0x0FFFFFF8) {
+    printf("FAT file 3: end\n");
   }
 
+  Buff_cluster* pao = read_fat32("/TEST/TESTL/TESTT.TXT\0", 6);
+  printf("%s\n", pao->Buff);
   printf("All tests completed.\n");
+
 }

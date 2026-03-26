@@ -20,6 +20,7 @@
 #define FREE_FAT            0x00000000
 #define EOF_FAT             0x0FFFFFF8
 #define ROOT_DIR_CLUSTER    2
+#define FAT32_MASK          0x0FFFFFFF
 
 #define FREE_ENTRY    0x00
 #define DELETED_ENTRY 0xE5
@@ -115,9 +116,20 @@ typedef struct __attribute__((packed)) {
 } LongFat32_DirEntry;
 
 typedef struct {
+  FAT32_DirEntry* entry;
   uint32_t Cluster;
   uint32_t Offset;
-} Entry_Addr;
+} Entry;
+
+typedef struct {
+  Entry* Parent_entry;
+  Entry* Self_entry;
+} Ref;
+
+typedef struct {
+  uint32_t Cluster;
+  uint8_t* Buff;
+} Buff_cluster;
 
 void create_fat32();
 
