@@ -189,6 +189,20 @@ void update_cluster(uint32_t cluster, uint32_t offset, void* fat_entry, uint32_t
   free(buf);
 }
 
+uint32_t get_n_file_cluster(uint32_t cluster, uint32_t n) {
+  uint8_t *cluster_buff = (uint8_t*)alloc(clusterSizeBytes);
+  uint32_t fat_entry;
+  for (uint32_t i = 0; i < n; i++) {
+    read_ata_st_c(get_fat_sector(cluster), cluster_buff, fat_boot->BPB_SecPerClus, &drv);
+    fat_entry = (uint32_t)cluster_buff[get_fat_offset(cluster)];
+    cluster = fat_entry & FAT32_MASK;
+    uint32_t fat_entry = (uint32_t)cluster_buff[get_fat_offset(cluster)];
+    uint32_t val = fat_entry & FAT32_MASK;
+    cluster = val;
+  }
+  return cluster;
+}
+
 Entry* get_free_entry_in_cluster(uint32_t cluster) {
   FAT32_DirEntry* entry;
   uint8_t* cluster_buff = alloc(clusterSizeBytes);
@@ -253,25 +267,21 @@ Entry* get_entry(uint32_t cluster, uint8_t entry_name[MAX_ENTRY_NAME]) {
 }
 
 void format_name(uint8_t name[MAX_ENTRY_NAME], uint32_t name_len, bool is_dir) {
+  if (!is_dir) {
+    name[MAX_ENTRY_NAME - 2] = name[name_len - 2];
+    name[MAX_ENTRY_NAME - 3] = name[name_len - 3];
+    name[MAX_ENTRY_NAME - 4] = name[name_len - 4];
+  }
   if (name_len <= MAX_ENTRY_NAME) {
-    for (uint8_t i = 0; i < 11; i++) {
-      if (!is_dir && i >= name_len - 4) {
-        if (name[i] == '.') {
-          name[10] = name[name_len - 1];
-          name[9] = name[name_len - 2];
-          name[8] = name[name_len - 3];
-          name[i] = ' ';
-        } else {
-          name[i] = ' ';
-          if (name_len - 1 - i == 0) {
-            break;
-          }
-        }
-      } else if (i >= name_len) {
+    for (uint8_t i = 0; i < MAX_ENTRY_NAME; i++) {
+      if (!is_dir && i >= name_len - 4 - 1 && i <= MAX_ENTRY_NAME - 4 - 1) {
+        name[i] = ' ';
+      } else if (is_dir && i >= name_len) {
         name[i] = ' ';
       }
     }
   }
+  name[MAX_ENTRY_NAME - 1] = '\0';
 }
 
  Ref* check_path(uint8_t* path, bool is_dir, bool is_insert, uint8_t last_entry[MAX_ENTRY_NAME]) {
@@ -330,12 +340,19 @@ void format_name(uint8_t name[MAX_ENTRY_NAME], uint32_t name_len, bool is_dir) {
       }
       c = *ptr;
       Entry* entry_addr;
-      if ((c == '/' ) || (c == '\0' && !is_insert)) {
-        current_path[path_len] = '\0';
+      
+      current_path[path_len] = '\0';
+      path_len++;
+      if ((c == '/') || (c == '\0' && !is_insert)) {
+
         ref_cluster->Parent_entry = entry_addr;
+        bool current_path_is_dir = is_dir;
+        if (c == '/') {
+          current_path_is_dir = true;
+        }
+        format_name(current_path, path_len, current_path_is_dir);
         entry_addr = get_entry(cluster, current_path);
         if (entry_addr == (Entry*)0) {
-          printf("dir not founssd: %s\n", current_path);
           free(e);
           free(ref_cluster);
           return (Ref*)0;
@@ -417,8 +434,9 @@ void format_name(uint8_t name[MAX_ENTRY_NAME], uint32_t name_len, bool is_dir) {
     c = *ptr;
   }
 
-
-
+  if (is_insert) {
+    format_name(current_path, path_len, is_dir);
+  }
   memcpy(last_entry, current_path, MAX_ENTRY_NAME);
 
   return ref_cluster;
@@ -480,10 +498,9 @@ Buff_cluster* read_fat32(uint8_t* path, uint32_t size) {
     }
     read_ata_st_c(get_cluster_sector(cluster), cluster_buff, fat_boot->BPB_SecPerClus, &drv);
     memcpy(&buff[i * clusterSizeBytes], cluster_buff, bytes);
-    read_ata_st_c(get_fat_sector(cluster), cluster_buff, fat_boot->BPB_SecPerClus, &drv);
-    uint32_t fat_entry = (uint32_t)cluster_buff[get_fat_offset(cluster)];
-    uint32_t val = fat_entry & FAT32_MASK;
-    cluster = val;
+    if (i != clusters - 1) { 
+      cluster = get_n_file_cluster(cluster, 1); 
+    }
   }
   
   Buff_cluster* buff_cluster = (Buff_cluster*)alloc(sizeof(Buff_cluster));
@@ -495,7 +512,56 @@ Buff_cluster* read_fat32(uint8_t* path, uint32_t size) {
   return buff_cluster;
 }
 
-//uint8_t* read_fat32_offset(uint32_t cluster, uint32_t offset, uint32_t size) {}
+
+Buff_cluster* read_fat32_offset(uint32_t file_cluster, uint32_t offset, uint32_t size) {
+  uint32_t cluster = (offset / clusterSizeBytes) + 1;
+  uint32_t clusters = (size + clusterSizeBytes - 1) / clusterSizeBytes;
+  uint8_t* cluster_buff = alloc(clusterSizeBytes);
+  uint32_t bytes;
+
+  if (cluster > 1) {
+    cluster = get_n_file_cluster(file_cluster, cluster);
+  } else {
+    cluster = file_cluster;
+  }
+
+  read_ata_st_c(get_cluster_sector(cluster), cluster_buff, fat_boot->BPB_SecPerClus, &drv);
+  uint8_t* buff = (uint8_t*)alloc(size);
+
+  uint32_t clus_size = clusterSizeBytes - offset;
+  if (size > clus_size) {
+    bytes = clus_size;
+  } else {
+    bytes = size;
+  }
+
+  memcpy(buff, &cluster_buff[offset % clusterSizeBytes], bytes);
+
+  if (bytes != size) {
+    read_ata_st_c(get_fat_sector(cluster), cluster_buff, fat_boot->BPB_SecPerClus, &drv);
+    uint32_t fat_entry = (uint32_t)cluster_buff[get_fat_offset(cluster)];
+    uint32_t val = fat_entry & FAT32_MASK;
+    cluster = val;
+    clusters--;
+    for (uint32_t i = 0; i < clusters; i++) {
+      bytes = clusterSizeBytes;
+      if (i == clusters - 1) {
+        bytes = size - (i * clusterSizeBytes);
+      }
+      read_ata_st_c(get_cluster_sector(cluster), cluster_buff, fat_boot->BPB_SecPerClus, &drv);
+      memcpy(&buff[i * clusterSizeBytes], cluster_buff, bytes);
+      cluster = get_n_file_cluster(cluster, 1);
+    }
+  }
+
+  Buff_cluster* buff_cluster = (Buff_cluster*)alloc(sizeof(Buff_cluster));
+  buff_cluster->Buff = buff;
+  buff_cluster->Cluster = cluster;
+
+  free(cluster_buff);
+
+  return buff_cluster;
+}
 
 bool create_fat32_directory(uint8_t* path) {
   uint8_t new_entry[MAX_ENTRY_NAME];
@@ -513,6 +579,12 @@ bool create_fat32_directory(uint8_t* path) {
 
   if (check_file_name_exists(entry_cluster, new_entry)) {
     printf("this name already exists: %s\n", new_entry);
+    if (ref_cluster->Parent_entry != (Entry*)0) {
+      free(ref_cluster->Parent_entry);
+    }
+    if (ref_cluster->Self_entry != (Entry*)0) {
+      free(ref_cluster->Self_entry);
+    }
     free(ref_cluster);
     return (Ref*)0;
   }
@@ -540,6 +612,12 @@ bool create_fat32_directory(uint8_t* path) {
   fat_entry = create_fat32_entry(cluster, new_entry, get_entry_offset_in_cluster(1), attr);
   update_cluster(cluster, get_entry_offset_in_cluster(1), &fat_entry, sizeof(FAT32_DirEntry), true);
 
+  if (ref_cluster->Parent_entry != (Entry*)0) {
+    free(ref_cluster->Parent_entry);
+  }
+  if (ref_cluster->Self_entry != (Entry*)0) {
+    free(ref_cluster->Self_entry);
+  }
   free(entry_addr->entry);
   free(entry_addr);
   free(ref_cluster);
@@ -566,6 +644,12 @@ bool create_fat32_file(uint8_t *buffer, uint8_t* path, uint32_t size) {
 
   if (check_file_name_exists(entry_cluster, new_entry)) {
     printf("this name already exists: %s\n", new_entry);
+    if (ref_cluster->Parent_entry != (Entry*)0) {
+      free(ref_cluster->Parent_entry);
+    }
+    if (ref_cluster->Self_entry != (Entry*)0) {
+      free(ref_cluster->Self_entry);
+    }
     free(ref_cluster);
     return (Ref*)0;
   }
@@ -599,6 +683,12 @@ bool create_fat32_file(uint8_t *buffer, uint8_t* path, uint32_t size) {
     cluster = fs_info->FSI_Nxt_Free;
   }
 
+  if (ref_cluster->Parent_entry != (Entry*)0) {
+    free(ref_cluster->Parent_entry);
+  }
+  if (ref_cluster->Self_entry != (Entry*)0) {
+    free(ref_cluster->Self_entry);
+  }
   free(entry_addr->entry);
   free(entry_addr);
   free(ref_cluster);
@@ -650,8 +740,6 @@ void create_fat32() {
     write_ata_st_c(fat_boot->BPB_RsvdSecCnt + i * fat_boot->BPB_FATSz32, fat, 1, &drv);
   }
 
-
-    
     // ==============================================
   // Test section - Verifying FAT32 file and directory creation
   // ==============================================
@@ -757,8 +845,16 @@ void create_fat32() {
     printf("FAT file 3: end\n");
   }
 
-  Buff_cluster* pao = read_fat32("/TEST/TESTL/TESTT.TXT\0", 6);
+  Buff_cluster* pao = read_fat32("/TEST/TESTL/TESTT.TXT\0", 3);
+  if (pao == (Buff_cluster*)0) {
+    return;
+  }
+  printf("%s", pao->Buff);
+  pao = read_fat32_offset(pao->Cluster, 3, 3);
+  if (pao == (Buff_cluster*)0) {
+    return;
+  }
   printf("%s\n", pao->Buff);
-  printf("All tests completed.\n");
 
+  printf("All tests completed.\n");
 }
