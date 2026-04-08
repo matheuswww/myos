@@ -124,12 +124,12 @@ typedef struct {
 typedef struct {
   Entry* Parent_entry;
   Entry* Self_entry;
-} Ref;
+} Path_Ref;
 
 typedef struct {
   uint32_t Cluster;
   uint8_t* Buff;
-} Buff_cluster;
+} Cluster_Buffer;
 
 void create_fat32();
 
