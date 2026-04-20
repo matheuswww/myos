@@ -137,7 +137,9 @@ void update_fat_entry(uint32_t entry, uint32_t val) {
   read_ata_st_c(sector, buffer, 1, &drv);
   uint32_t offset = get_fat_offset(entry) / 4;
   buffer[offset] = val;
+  uint32_t mirror = sector + fat_boot->BPB_FATSz32;
   write_ata_st_c(sector, buffer, 1, &drv);
+  write_ata_st_c(mirror, buffer, 1, &drv);
 }
 
 uint32_t get_next_free_cluster() {
@@ -170,6 +172,8 @@ bool update_next_free_cluster() {
     return false;
   }
   fs_info->FSI_Nxt_Free = next;
+  write_ata_st_c(fat_boot->BPB_FSInfo, fs_info, 1, &drv);
+  write_ata_st_c(fat_boot->BPB_BkBootSec + 1, fs_info, 1, &drv);
   return true;
 }
 
@@ -189,12 +193,15 @@ void update_cluster(uint32_t cluster, uint32_t offset, void* fat_entry, uint32_t
   free(buf);
 }
 
-uint32_t get_n_file_cluster(uint32_t cluster, uint32_t n) {
+int64_t get_n_file_cluster(uint32_t cluster, uint32_t n) {
   uint8_t *cluster_buff = (uint8_t*)alloc(clusterSizeBytes);
   for (uint32_t i = 0; i < n; i++) {
     read_ata_st_c(get_fat_sector(cluster), cluster_buff, 1, &drv);
     uint32_t* fat_entry = (uint32_t*)&cluster_buff[get_fat_offset(cluster)];
     uint32_t val = *fat_entry & FAT32_MASK;
+    if (val >= EOF_FAT) {
+      return -1;
+    }
     cluster = val;
   }
   free(cluster_buff);
@@ -580,6 +587,9 @@ Cluster_Buffer* read_fat32_offset(uint32_t file_cluster, uint32_t offset, uint32
 
   if (cluster > 1) {
     cluster = get_n_file_cluster(file_cluster, cluster);
+    if (cluster < 0) {
+      return (Cluster_Buffer*)0;
+    }
   } else {
     cluster = file_cluster;
   }
@@ -737,7 +747,7 @@ bool create_fat32_file(uint8_t *buffer, uint8_t* path, uint32_t size) {
     if (i != clusters - 1) {
       update_cluster(cluster, 0, write, clusterSizeBytes, false);
       entry_val = fs_info->FSI_Nxt_Free;
-      write+=fat_boot->BPB_BytsPerSec*fat_boot->BPB_SecPerClus;
+      write+=clusterSizeBytes;
     } else {
       update_cluster(cluster, 0, write, size - (write - buffer), false);
       entry_val = EOF;
@@ -790,6 +800,8 @@ void create_fat32() {
 
   write_ata_st_c(fat_boot->BPB_BkBootSec, backup, sectors_backup, &drv);
 
+  free(backup);
+
   uint8_t zero[512];
   memset(zero, 0, 512);
 
@@ -840,4 +852,5 @@ void create_fat32() {
   } else {
     printf("READ FAILED\n\0");
   }
+
 }
